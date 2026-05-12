@@ -23,7 +23,7 @@ class WeatherService {
   static Future<WeatherData> getCurrentWeather() async {
     try {
       // 1. Get Location
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled().timeout(const Duration(seconds: 5));
       if (!serviceEnabled) throw 'Location services are disabled.';
 
       LocationPermission permission = await Geolocator.checkPermission();
@@ -32,13 +32,15 @@ class WeatherService {
         if (permission == LocationPermission.denied) throw 'Location permissions are denied';
       }
 
-      Position position = await Geolocator.getCurrentPosition();
+      Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.low, // Faster lock
+      ).timeout(const Duration(seconds: 10));
 
       // 2. Fetch Weather
       final url = Uri.parse(
           'https://api.openweathermap.org/data/2.5/weather?lat=${position.latitude}&lon=${position.longitude}&appid=$_apiKey&units=metric');
       
-      final response = await http.get(url);
+      final response = await http.get(url).timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         final main = data['main'];
@@ -51,15 +53,16 @@ class WeatherService {
           isRainy: weather['main'].toString().toLowerCase().contains('rain'),
         );
       } else {
-        throw 'Failed to load weather';
+        debugPrint("Weather API Error: ${response.statusCode} - ${response.body}");
+        throw 'Failed to load weather: ${response.statusCode}';
       }
     } catch (e) {
-      // Fallback to mock if anything fails (useful for dev/testing)
-      print("Weather Error: $e");
+      debugPrint("Weather Integration Error: $e");
+      // Fallback
       return WeatherData(
-        temperature: 22.0,
-        condition: "Cloudy",
-        icon: "☁️",
+        temperature: 20.0,
+        condition: "Unknown",
+        icon: "⛅",
         isRainy: false,
       );
     }

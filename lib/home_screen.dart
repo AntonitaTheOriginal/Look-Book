@@ -284,8 +284,20 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text("${currentWeather!.temperature.toStringAsFixed(1)}°C  |  ${currentWeather!.condition.toUpperCase()}", 
-                  style: const TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1, fontSize: 14, color: Colors.white)),
+                Row(
+                  children: [
+                    Text("${currentWeather!.temperature.toStringAsFixed(1)}°C  |  ${currentWeather!.condition.toUpperCase()}", 
+                      style: const TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1, fontSize: 14, color: Colors.white)),
+                    const Spacer(),
+                    GestureDetector(
+                      onTap: () {
+                        setState(() => currentWeather = null);
+                        _fetchWeather();
+                      },
+                      child: const Icon(Icons.refresh, size: 14, color: Color(0xFFD4AF37)),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 4),
                 Text(WeatherService.getSuggestion(currentWeather!), 
                   style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
