@@ -3,8 +3,12 @@ import 'screens/closet_screen.dart';
 import 'screens/laundry_screen.dart';
 import 'utils/outfit_generator.dart';
 import 'utils/weather_service.dart';
+import 'utils/claude_service.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'dart:io';
+import 'models/clothes_item.dart';
+import 'models/outfit.dart';
+
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -18,12 +22,23 @@ class _HomeScreenState extends State<HomeScreen> {
   String selectedCategory = "Work";
   Map<String, dynamic>? outfit;
   WeatherData? currentWeather;
+  String? stylistAdvice;
   bool boldMode = true;
+  bool isAiThinking = false;
 
   @override
   void initState() {
     super.initState();
-    currentWeather = WeatherService.getCurrentWeather();
+    _fetchWeather();
+  }
+
+  Future<void> _fetchWeather() async {
+    final weather = await WeatherService.getCurrentWeather();
+    if (mounted) {
+      setState(() {
+        currentWeather = weather;
+      });
+    }
   }
 
   @override
@@ -32,7 +47,7 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
-  void _generate(bool isHurry) {
+  void _generate(bool isHurry) async {
     setState(() {
       outfit = generateOutfit(
         weather: currentWeather,
@@ -41,6 +56,8 @@ class _HomeScreenState extends State<HomeScreen> {
         hurryMode: isHurry,
         boldMode: boldMode,
       );
+      stylistAdvice = null;
+      isAiThinking = true;
     });
     
     // Only show the warning if both top AND dress are missing (truly empty result)
@@ -48,6 +65,24 @@ class _HomeScreenState extends State<HomeScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Not enough clean clothes! Check your laundry. 🧺")),
       );
+      setState(() => isAiThinking = false);
+      return;
+    }
+
+    // Fetch AI Advice from Claude
+    final advice = await ClaudeService.getStylistAdvice(
+      top: outfit!['top'] as ClothesItem?,
+      bottom: outfit!['bottom'] as ClothesItem?,
+      shoes: outfit!['shoes'] as ClothesItem?,
+      weather: currentWeather,
+      occasion: selectedCategory,
+    );
+
+    if (mounted) {
+      setState(() {
+        stylistAdvice = advice;
+        isAiThinking = false;
+      });
     }
   }
 
@@ -156,32 +191,48 @@ class _HomeScreenState extends State<HomeScreen> {
 
             const SizedBox(height: 25),
 
-            if (currentWeather != null)
-              Container(
-                margin: const EdgeInsets.only(bottom: 25),
-                padding: const EdgeInsets.all(15),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(15),
-                ),
-                child: Row(
-                  children: [
-                    Text(currentWeather!.icon, style: const TextStyle(fontSize: 24)),
-                    const SizedBox(width: 15),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text("${currentWeather!.temperature}°C - ${currentWeather!.condition}",
-                              style: const TextStyle(fontWeight: FontWeight.bold)),
-                          Text(WeatherService.getSuggestion(currentWeather!.temperature),
-                              style: const TextStyle(color: Colors.grey, fontSize: 13)),
-                        ],
-                      ),
-                    )
-                  ],
-                ),
+            // 🌦️ Weather Display
+            Container(
+              margin: const EdgeInsets.only(bottom: 25),
+              padding: const EdgeInsets.all(15),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(15),
+                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 10)],
               ),
+              child: currentWeather == null
+                ? const Row(
+                    children: [
+                      CircularProgressIndicator(strokeWidth: 2),
+                      SizedBox(width: 15),
+                      Text("Fetching real-time weather...", style: TextStyle(color: Colors.grey)),
+                    ],
+                  )
+                : Row(
+                    children: [
+                      Text(currentWeather!.icon, style: const TextStyle(fontSize: 24)),
+                      const SizedBox(width: 15),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text("${currentWeather!.temperature.toStringAsFixed(1)}°C - ${currentWeather!.condition}",
+                                style: const TextStyle(fontWeight: FontWeight.bold)),
+                            Text(WeatherService.getSuggestion(currentWeather!),
+                                style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.refresh, size: 18, color: Colors.brown),
+                        onPressed: () {
+                          setState(() => currentWeather = null);
+                          _fetchWeather();
+                        },
+                      )
+                    ],
+                  ),
+            ),
 
             GestureDetector(
               onTap: () => _generate(true),
@@ -255,28 +306,109 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
 
-            if (outfit != null && (outfit!['top'] != null || outfit!['isDressOutfit'] == true)) ...[
-              const SizedBox(height: 30),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    "Your Outfit 🔥",
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              if (outfit != null && (outfit!['top'] != null || outfit!['isDressOutfit'] == true)) ...[
+                const SizedBox(height: 30),
+                
+                // ✨ Claude AI Stylist Panel
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(20),
+                  margin: const EdgeInsets.only(bottom: 25),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [const Color(0xFFB08968).withOpacity(0.1), const Color(0xFFF5F1ED)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(25),
+                    border: Border.all(color: const Color(0xFFB08968).withOpacity(0.2)),
+                    boxShadow: [
+                      BoxShadow(color: Colors.brown.withOpacity(0.05), blurRadius: 20, offset: const Offset(0, 10))
+                    ],
                   ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.auto_awesome, color: Color(0xFFB08968), size: 20),
+                          const SizedBox(width: 10),
+                          const Text("Claude AI Stylist", 
+                            style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFFB08968), letterSpacing: 0.5)),
+                          const Spacer(),
+                          if (isAiThinking)
+                            const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFB08968))),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      if (isAiThinking)
+                        const Text("Curating your look insights...", style: TextStyle(fontStyle: FontStyle.italic, color: Colors.grey, fontSize: 13))
+                      else if (stylistAdvice != null)
+                        Text(stylistAdvice!, 
+                          style: const TextStyle(height: 1.5, color: Colors.black87, fontSize: 14, fontWeight: FontWeight.w400))
+                      else
+                        const Text("Analyzing your style choices...", style: TextStyle(color: Colors.grey, fontSize: 13)),
+                    ],
+                  ),
+                ),
+                
+                // 🧠 AI Insights Panel
+                if (outfit!['aiInsights'] != null)
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    margin: const EdgeInsets.only(bottom: 20),
                     decoration: BoxDecoration(
-                      color: Colors.brown.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(10),
+                      color: Colors.brown.withOpacity(0.05),
+                      borderRadius: BorderRadius.circular(15),
+                      border: Border.all(color: Colors.brown.withOpacity(0.1)),
                     ),
-                    child: Text(
-                      outfit!['harmony'] ?? "", 
-                      style: const TextStyle(color: Colors.brown, fontSize: 10, fontWeight: FontWeight.bold),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Row(
+                          children: [
+                            Icon(Icons.psychology, color: Colors.brown, size: 20),
+                            SizedBox(width: 8),
+                            Text("AI Insights", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.brown)),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        ...(outfit!['aiInsights'] as Map<String, dynamic>).entries.map((e) => Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.check_circle_outline, size: 14, color: Colors.green),
+                              const SizedBox(width: 8),
+                              Expanded(child: Text(e.value.toString(), style: const TextStyle(fontSize: 12, color: Colors.black87))),
+                            ],
+                          ),
+                        )).toList(),
+                      ],
                     ),
                   ),
-                ],
-              ),
+
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      "Your Outfit 🔥",
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.brown.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        outfit!['harmony'] ?? "", 
+                        style: const TextStyle(color: Colors.brown, fontSize: 10, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ],
+                ),
+
               const SizedBox(height: 15),
               Column(
                 children: [
@@ -332,26 +464,21 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(backgroundColor: Colors.brown),
                       onPressed: () async {
-                        final box = Hive.box('clothesBox');
-                        final now = DateTime.now().toIso8601String();
+                        final box = Hive.box<ClothesItem>('clothesBox_v2');
+                        final now = DateTime.now();
 
-                        for (String k in ['topKey', 'bottomKey']) {
+                        for (String k in ['topKey', 'bottomKey', 'shoesKey']) {
                           if (outfit![k] != null) {
                             final item = box.get(outfit![k]);
-                            item['isDirty'] = true;
-                            item['wearCount'] = (item['wearCount'] ?? 0) + 1;
-                            item['lastWornDate'] = now;
-                            await box.put(outfit![k], item);
+                            if (item != null) {
+                              if (k != 'shoesKey') item.isDirty = true;
+                              item.wearCount += 1;
+                              item.lastWornDate = now;
+                              await item.save();
+                            }
                           }
                         }
-                        // Footwear: use 'isUsed' not 'isDirty'
-                        if (outfit!['shoesKey'] != null) {
-                          final item = box.get(outfit!['shoesKey']);
-                          item['isUsed'] = true;
-                          item['wearCount'] = (item['wearCount'] ?? 0) + 1;
-                          item['lastWornDate'] = now;
-                          await box.put(outfit!['shoesKey'], item);
-                        }
+
 
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(content: Text("Outfit tracked! Clothes to laundry, shoes to rack. 🧺👟")),
@@ -383,8 +510,9 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 10),
             
             ValueListenableBuilder(
-              valueListenable: Hive.box('savedOutfitsBox').listenable(),
-              builder: (context, Box box, _) {
+              valueListenable: Hive.box<Outfit>('savedOutfits_v2').listenable(),
+              builder: (context, Box<Outfit> box, _) {
+
                 if (box.isEmpty) {
                   return const Text("No saved looks yet.");
                 }
@@ -445,6 +573,12 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget outfitCard(dynamic item, String label) {
     if (item == null) return const SizedBox();
 
+    // Handle both Map (legacy/lucky dip) and ClothesItem (new)
+    final String path = item is ClothesItem ? item.path : item['path'];
+    final String color = item is ClothesItem ? item.color : item['color'];
+    final String occasion = item is ClothesItem ? (item.occasion ?? "N/A") : (item['occasion'] ?? "N/A");
+    final bool needsIroning = item is ClothesItem ? item.needsIroning : (item['needsIroning'] ?? false);
+
     return Container(
       height: 140,
       width: double.infinity,
@@ -460,7 +594,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ClipRRect(
             borderRadius: const BorderRadius.only(topLeft: Radius.circular(20), bottomLeft: Radius.circular(20)),
             child: Image.file(
-              File(item['path']),
+              File(path),
               width: 120,
               height: 140,
               fit: BoxFit.cover,
@@ -475,10 +609,26 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   Text(label, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                   const SizedBox(height: 5),
-                  Text("${item['color']} • ${item['occasion']} • ${item['place']}", 
+                  Text("$color • $occasion", 
                       style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                  if (item is ClothesItem && item.tags.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4.0),
+                      child: Wrap(
+                        spacing: 4,
+                        children: item.tags.take(2).map((tag) => Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.brown.withOpacity(0.05),
+                            borderRadius: BorderRadius.circular(5),
+                          ),
+                          child: Text(tag, style: const TextStyle(fontSize: 9, color: Colors.brown)),
+                        )).toList(),
+                      ),
+                    ),
                   const SizedBox(height: 5),
-                  if (item['needsIroning'] == true)
+
+                  if (needsIroning)
                     const Row(
                       children: [
                         Icon(Icons.iron, size: 12, color: Colors.orange),
@@ -502,6 +652,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+
 
   Widget _navItem(BuildContext context, IconData icon, String label, VoidCallback onTap) {
     return Column(

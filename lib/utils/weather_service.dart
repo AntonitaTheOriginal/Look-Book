@@ -1,29 +1,86 @@
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:geolocator/geolocator.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+
 class WeatherData {
   final double temperature;
   final String condition;
   final String icon;
+  final bool isRainy;
 
   WeatherData({
     required this.temperature,
     required this.condition,
     required this.icon,
+    this.isRainy = false,
   });
 }
 
 class WeatherService {
-  static WeatherData getCurrentWeather() {
-    // This is a mock implementation. 
-    // In a real app, this would fetch from an API like OpenWeatherMap.
-    return WeatherData(
-      temperature: 22.0,
-      condition: "Sunny",
-      icon: "☀️",
-    );
+  static String get _apiKey => dotenv.env['OPENWEATHER_API_KEY'] ?? "";
+
+  static Future<WeatherData> getCurrentWeather() async {
+    try {
+      // 1. Get Location
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) throw 'Location services are disabled.';
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) throw 'Location permissions are denied';
+      }
+
+      Position position = await Geolocator.getCurrentPosition();
+
+      // 2. Fetch Weather
+      final url = Uri.parse(
+          'https://api.openweathermap.org/data/2.5/weather?lat=${position.latitude}&lon=${position.longitude}&appid=$_apiKey&units=metric');
+      
+      final response = await http.get(url);
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final main = data['main'];
+        final weather = data['weather'][0];
+        
+        return WeatherData(
+          temperature: (main['temp'] as num).toDouble(),
+          condition: weather['main'],
+          icon: _getWeatherIcon(weather['main']),
+          isRainy: weather['main'].toString().toLowerCase().contains('rain'),
+        );
+      } else {
+        throw 'Failed to load weather';
+      }
+    } catch (e) {
+      // Fallback to mock if anything fails (useful for dev/testing)
+      print("Weather Error: $e");
+      return WeatherData(
+        temperature: 22.0,
+        condition: "Cloudy",
+        icon: "☁️",
+        isRainy: false,
+      );
+    }
   }
 
-  static String getSuggestion(double temp) {
-    if (temp > 25) return "Stay cool! It's hot outside.";
-    if (temp < 15) return "It's a bit chilly. Grab a jacket!";
-    return "Perfect weather for a light outfit!";
+  static String _getWeatherIcon(String condition) {
+    switch (condition.toLowerCase()) {
+      case 'clear': return "☀️";
+      case 'clouds': return "☁️";
+      case 'rain': return "🌧️";
+      case 'snow': return "❄️";
+      case 'thunderstorm': return "⛈️";
+      default: return "⛅";
+    }
+  }
+
+  static String getSuggestion(WeatherData weather) {
+    if (weather.isRainy) return "It's raining! Wear waterproof shoes and a jacket.";
+    if (weather.temperature > 28) return "Stay cool! High sun intensity today.";
+    if (weather.temperature < 15) return "It's a bit chilly. Grab a sweater!";
+    return "Beautiful day! Perfect for a light outfit.";
   }
 }
+

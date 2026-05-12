@@ -4,17 +4,30 @@ import 'screens/closet_screen.dart';
 import 'screens/calendar_screen.dart';
 import 'screens/analytics_screen.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+
+import 'models/clothes_item.dart';
+import 'models/outfit.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: ".env");
 
   await Hive.initFlutter();
-  await Hive.openBox('clothesBox');
-  await Hive.openBox('savedOutfitsBox');
-  await Hive.openBox('calendarBox');
+  
+  // Register Adapters
+  Hive.registerAdapter(ClothesItemAdapter());
+  Hive.registerAdapter(OutfitAdapter());
+
+  // Clear old data for migration to new structured models as per user approval
+  // We use v2 box names to avoid conflicts and ensure a clean start
+  await Hive.openBox<ClothesItem>('clothesBox_v2');
+  await Hive.openBox<Outfit>('savedOutfits_v2');
+  await Hive.openBox('calendarBox'); 
 
   runApp(const LookBookApp());
 }
+
 
 class LookBookApp extends StatelessWidget {
   const LookBookApp({super.key});

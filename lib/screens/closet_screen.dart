@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import 'dart:io';
 import 'package:image_picker/image_picker.dart';
 import 'package:hive/hive.dart';
 import '../utils/ai_analyzer.dart';
+import '../models/clothes_item.dart';
+
 
 class ClosetScreen extends StatefulWidget {
   const ClosetScreen({super.key});
@@ -19,7 +22,10 @@ class _ClosetScreenState extends State<ClosetScreen> {
   String selectedPlace = "Office";
   bool needsIroning = false;
   bool isScanning = false;
+  String? processedPath;
+  List<String> suggestedTags = [];
   final ImagePicker picker = ImagePicker();
+
 
   // Progress calculation
   double _calculateProgress(Box box) {
@@ -43,10 +49,19 @@ class _ClosetScreenState extends State<ClosetScreen> {
     if (pickedFile == null) return;
 
     setState(() => isScanning = true);
-    final aiResults = await AiAnalyzer.analyzeImage(pickedFile.path);
+    
+    // 1. Local Background Removal (Offline)
+    final removedBgPath = await AiAnalyzer.removeBackground(pickedFile.path);
+    
+    // 2. AI Analysis (Tags, Colors)
+    final aiResults = await AiAnalyzer.analyzeImage(removedBgPath ?? pickedFile.path);
+    
     setState(() {
+      processedPath = removedBgPath ?? pickedFile.path;
       selectedColor = aiResults['color']!;
-      // Only suggest category from AI if it's a known one
+      suggestedTags = List<String>.from(aiResults['tags'] ?? []);
+      
+      // Determine category heuristic
       final aiCat = aiResults['category']!;
       if (['Tops', 'Bottoms', 'Footwear', 'Dresses'].contains(aiCat)) {
         selectedCategory = aiCat;
@@ -54,26 +69,41 @@ class _ClosetScreenState extends State<ClosetScreen> {
       isScanning = false;
     });
 
-    _showSaveSheet(pickedFile.path);
+    _showSaveSheet(processedPath!);
   }
 
   void _saveItem(String path) {
-    final box = Hive.box('clothesBox');
+    final box = Hive.box<ClothesItem>('clothesBox_v2');
     final isFootwear = selectedCategory == 'Footwear';
-    box.add({
-      "path": path,
-      "category": selectedCategory,
-      "color": selectedColor,
-      "occasion": isFootwear ? null : selectedOccasion,
-      "place": isFootwear ? null : selectedPlace,
-      "needsIroning": isFootwear ? false : needsIroning,
-      "isDirty": false,
-      "isUsed": false,
-      "wearCount": 0,
-      "lastWornDate": null,
-    });
+    
+    // Calculate derived fields (Heuristic for now)
+    double formality = 0.5;
+    if (selectedOccasion == 'Formal') formality = 0.9;
+    if (selectedOccasion == 'Work') formality = 0.7;
+    if (selectedOccasion == 'Casual') formality = 0.3;
+
+    final item = ClothesItem(
+      path: path,
+      category: selectedCategory,
+      color: selectedColor,
+      occasion: isFootwear ? null : selectedOccasion,
+      place: isFootwear ? null : selectedPlace,
+      needsIroning: isFootwear ? false : needsIroning,
+      isDirty: false,
+      wearCount: 0,
+      lastWornDate: null,
+      formalityScore: formality,
+      weatherSuitability: ['All'],
+      colorHue: 0.0,
+      tags: suggestedTags, // Save the tags
+    );
+    
+    box.add(item);
     setState(() => images.add(File(path)));
   }
+
+
+
 
   void _showSaveSheet(String path) {
     showModalBottomSheet(
@@ -106,16 +136,17 @@ class _ClosetScreenState extends State<ClosetScreen> {
                       children: [
                         Icon(Icons.auto_awesome, size: 12, color: Colors.brown),
                         SizedBox(width: 4),
-                        Text("AI Scanned",
-                            style: TextStyle(color: Colors.brown, fontSize: 11)),
+                        Text("AI Enhanced",
+                            style: TextStyle(color: Colors.brown, fontWeight: FontWeight.bold, fontSize: 11)),
                       ],
                     ),
                   )
                 ],
               ),
               const SizedBox(height: 4),
-              const Text("Review and adjust before saving",
+              const Text("Background removed & attributes tagged offline",
                   style: TextStyle(color: Colors.grey, fontSize: 13)),
+
               const SizedBox(height: 20),
               Center(
                 child: ClipRRect(
@@ -148,30 +179,54 @@ class _ClosetScreenState extends State<ClosetScreen> {
                 ),
               ),
               const SizedBox(height: 16),
-              const Text("Primary Color", style: TextStyle(fontWeight: FontWeight.bold)),
+              const Text("Fabric & Weather Attributes", style: TextStyle(fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: ['black','white','blue','brown','beige','red','green','yellow','pink','purple','orange','teal']
-                      .map((col) {
-                    final isSel = selectedColor == col;
-                    return GestureDetector(
-                      onTap: () => setModalState(() => selectedColor = col),
-                      child: Container(
-                        margin: const EdgeInsets.only(right: 8),
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: isSel ? Colors.brown : Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: isSel ? Colors.brown : Colors.grey.shade300),
-                        ),
-                        child: Text(col, style: TextStyle(color: isSel ? Colors.white : Colors.black87, fontSize: 12)),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  'Linen', 'Breathable', 'Cotton', 'Wool', 'Heavy Wool', 
+                  'Thermal', 'Waterproof', 'Windproof', 'Quick-dry', 'Thin', 'Thick'
+                ].map((tag) {
+                  final isSelected = suggestedTags.contains(tag);
+                  return GestureDetector(
+                    onTap: () => setModalState(() {
+                      if (isSelected) suggestedTags.remove(tag);
+                      else suggestedTags.add(tag);
+                    }),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: isSelected ? Colors.brown : Colors.white,
+                        borderRadius: BorderRadius.circular(15),
+                        border: Border.all(color: isSelected ? Colors.brown : Colors.grey.shade300),
                       ),
-                    );
-                  }).toList(),
-                ),
+                      child: Text(tag, style: TextStyle(
+                        color: isSelected ? Colors.white : Colors.black87,
+                        fontSize: 11,
+                      )),
+                    ),
+                  );
+                }).toList(),
               ),
+
+              const SizedBox(height: 16),
+              const Text("AI Suggested Tags", style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              if (suggestedTags.where((t) => !['Linen', 'Breathable', 'Cotton', 'Wool', 'Heavy Wool', 'Thermal', 'Waterproof', 'Windproof', 'Quick-dry', 'Thin', 'Thick'].contains(t)).isEmpty)
+                const Text("No AI attributes detected", style: TextStyle(fontSize: 11, color: Colors.grey))
+              else
+                Wrap(
+                  spacing: 8,
+                  children: suggestedTags.where((t) => !['Linen', 'Breathable', 'Cotton', 'Wool', 'Heavy Wool', 'Thermal', 'Waterproof', 'Windproof', 'Quick-dry', 'Thin', 'Thick'].contains(t)).map((tag) => Chip(
+                    label: Text(tag, style: const TextStyle(fontSize: 11)),
+                    backgroundColor: Colors.white,
+                    side: const BorderSide(color: Colors.brown),
+                    deleteIcon: const Icon(Icons.close, size: 12),
+                    onDeleted: () => setModalState(() => suggestedTags.remove(tag)),
+                  )).toList(),
+                ),
+
               // Only show Occasion/Place/Ironing for non-Footwear
               if (selectedCategory != 'Footwear') ...[
                 const SizedBox(height: 16),
@@ -245,12 +300,12 @@ class _ClosetScreenState extends State<ClosetScreen> {
 
   void loadImages() {
     try {
-      final box = Hive.box('clothesBox');
+      final box = Hive.box<ClothesItem>('clothesBox_v2');
       final storedItems = box.values.toList();
 
       setState(() {
         images = storedItems
-            .map((item) => File(item['path']))
+            .map((item) => File(item.path))
             .toList();
       });
     } catch (e) {
@@ -258,12 +313,14 @@ class _ClosetScreenState extends State<ClosetScreen> {
     }
   }
 
+
   @override
   Widget build(BuildContext context) {
-    final box = Hive.box('clothesBox');
+    final box = Hive.box<ClothesItem>('clothesBox_v2');
     final filteredItems = box.values
-        .where((item) => item['category'] == selectedCategory)
+        .where((item) => item.category == selectedCategory)
         .toList();
+
 
     return Scaffold(
       backgroundColor: const Color(0xFFF6F2EE),
@@ -305,7 +362,8 @@ class _ClosetScreenState extends State<ClosetScreen> {
                     children: [
                       // 📊 Dynamic Progress
                       Builder(builder: (context) {
-                        final box = Hive.box('clothesBox');
+                        final box = Hive.box<ClothesItem>('clothesBox_v2');
+
                         final progress = _calculateProgress(box);
                         final pct = (progress * 100).toInt();
                         return Column(
@@ -361,7 +419,8 @@ class _ClosetScreenState extends State<ClosetScreen> {
                             children: [
                               SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.brown)),
                               SizedBox(width: 12),
-                              Text("AI is scanning your garment...", style: TextStyle(color: Colors.brown, fontSize: 13)),
+                               Text("AI is removing background & tagging...", style: TextStyle(color: Colors.brown, fontSize: 13)),
+
                             ],
                           ),
                         ),
@@ -486,16 +545,44 @@ class _ClosetScreenState extends State<ClosetScreen> {
                         ),
                         itemBuilder: (context, index) {
                           final item = filteredItems[index];
-                          return Container(
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: Colors.brown.withOpacity(0.1)),
-                              image: DecorationImage(
-                                image: FileImage(File(item['path'])),
-                                fit: BoxFit.cover,
+                          return Stack(
+                            children: [
+                              Container(
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: Colors.brown.withOpacity(0.1)),
+                                  image: DecorationImage(
+                                    image: FileImage(File(item.path)),
+                                    fit: BoxFit.cover,
+                                  ),
+                                ),
                               ),
-                            ),
+                              Positioned(
+                                top: 5,
+                                right: 5,
+                                child: GestureDetector(
+                                  onTap: () async {
+                                    await item.delete();
+                                    setState(() {
+                                      images.removeWhere((f) => f.path == item.path);
+                                    });
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text("Item removed from closet")),
+                                    );
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.all(4),
+                                    decoration: const BoxDecoration(
+                                      color: Colors.white,
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: const Icon(Icons.close, size: 14, color: Colors.red),
+                                  ),
+                                ),
+                              ),
+                            ],
                           );
+
                         },
                       ),
                       const SizedBox(height: 100),
@@ -550,10 +637,11 @@ class _ClosetScreenState extends State<ClosetScreen> {
 
   Widget categorySelectChip(String category) {
     final isSelected = selectedCategory == category;
-    final box = Hive.box('clothesBox');
+    final box = Hive.box<ClothesItem>('clothesBox_v2');
     final count = box.values
-        .where((item) => item['category'] == category)
+        .where((item) => item.category == category)
         .length;
+
 
     return GestureDetector(
       onTap: () {

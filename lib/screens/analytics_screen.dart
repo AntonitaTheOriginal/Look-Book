@@ -1,24 +1,31 @@
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+
 import 'dart:io';
+import '../models/clothes_item.dart';
+
 
 class AnalyticsScreen extends StatelessWidget {
   const AnalyticsScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final box = Hive.box('clothesBox');
+    final box = Hive.box<ClothesItem>('clothesBox_v2');
     final items = box.values.toList();
 
+
     // 1. Sort by wearCount
-    final sortedByWear = List.from(items);
-    sortedByWear.sort((a, b) => (b['wearCount'] ?? 0).compareTo(a['wearCount'] ?? 0));
+    final sortedByWear = List<ClothesItem>.from(items);
+    sortedByWear.sort((a, b) => b.wearCount.compareTo(a.wearCount));
+
 
     // 2. Filter Top Items (Worn at least once)
-    final topItems = sortedByWear.where((i) => (i['wearCount'] ?? 0) > 0).take(5).toList();
+    final topItems = sortedByWear.where((i) => i.wearCount > 0).take(5).toList();
+
 
     // 3. Filter Dormant Items (Zero wears)
-    final dormantItems = items.where((i) => (i['wearCount'] ?? 0) == 0).toList();
+    final dormantItems = items.where((i) => i.wearCount == 0).toList();
+
 
     return Scaffold(
       backgroundColor: const Color(0xFFF5F1ED),
@@ -103,7 +110,8 @@ class AnalyticsScreen extends StatelessWidget {
         scrollDirection: Axis.horizontal,
         itemCount: items.length,
         itemBuilder: (context, index) {
-          final item = items[index];
+          final item = items[index] as ClothesItem;
+
           return Container(
             margin: const EdgeInsets.only(right: 15),
             width: 110,
@@ -121,10 +129,11 @@ class AnalyticsScreen extends StatelessWidget {
                   child: ClipRRect(
                     borderRadius: const BorderRadius.vertical(top: Radius.circular(15)),
                     child: Image.file(
-                      File(item['path']),
+                      File(item.path),
                       width: 110,
                       fit: BoxFit.cover,
                     ),
+
                   ),
                 ),
                 Padding(
@@ -132,12 +141,14 @@ class AnalyticsScreen extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(item['category'], 
+                      Text(item.category, 
                           style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+
                       const SizedBox(height: 2),
                       isDormant 
                         ? const Text("Never worn", style: TextStyle(fontSize: 9, color: Colors.red))
-                        : Text("${item['wearCount']} wears", style: const TextStyle(fontSize: 9, color: Colors.green)),
+                        : Text("${item.wearCount} wears", style: const TextStyle(fontSize: 9, color: Colors.green)),
+
                     ],
                   ),
                 )
