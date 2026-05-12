@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
-
 import 'dart:io';
 import '../models/clothes_item.dart';
-
+import '../main.dart';
 
 class LaundryScreen extends StatefulWidget {
   const LaundryScreen({super.key});
@@ -12,210 +11,125 @@ class LaundryScreen extends StatefulWidget {
   State<LaundryScreen> createState() => _LaundryScreenState();
 }
 
-class _LaundryScreenState extends State<LaundryScreen>
-    with SingleTickerProviderStateMixin {
-  late TabController _tabController;
+class _LaundryScreenState extends State<LaundryScreen> with SingleTickerProviderStateMixin {
+  late TabController _tabs;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabs = TabController(length: 2, vsync: this);
   }
 
   @override
   void dispose() {
-    _tabController.dispose();
+    _tabs.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F1ED),
       appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.black),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: const Text("Maintenance Hub",
-            style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-        bottom: TabBar(
-          controller: _tabController,
-          labelColor: Colors.brown,
-          unselectedLabelColor: Colors.grey,
-          indicatorColor: Colors.brown,
-          tabs: const [
-            Tab(icon: Icon(Icons.local_laundry_service), text: "Laundry"),
-            Tab(icon: Icon(Icons.cleaning_services), text: "Shoe Rack"),
-          ],
-        ),
+        title: const Text("MAINTENANCE HUB"),
         actions: [
           TextButton(
-            onPressed: () async {
-              final box = Hive.box<ClothesItem>('clothesBox_v2');
-              for (var key in box.keys) {
-                final item = box.get(key);
-                if (item != null && (item.isDirty == true)) {
-                  item.isDirty = false;
-                  await item.save();
-                }
-              }
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                    content: Text("Everything is clean and polished! ✨")),
-              );
-            },
-
-            child: const Text("All Clean",
-                style: TextStyle(color: Colors.brown)),
-          )
+            onPressed: _markAllClean,
+            child: const Text("All Clean ✨", style: TextStyle(color: kGold, fontWeight: FontWeight.w700)),
+          ),
         ],
+        bottom: TabBar(
+          controller: _tabs,
+          tabs: const [
+            Tab(icon: Icon(Icons.local_laundry_service_outlined), text: "Laundry"),
+            Tab(icon: Icon(Icons.cleaning_services_outlined), text: "Shoe Rack"),
+          ],
+        ),
       ),
       body: TabBarView(
-        controller: _tabController,
-        children: [
-          _laundryTab(context),
-          _shoeRackTab(context),
-        ],
+        controller: _tabs,
+        children: [_laundryTab(), _shoeRackTab()],
       ),
     );
   }
 
-  // 🧺 LAUNDRY TAB — Tops & Bottoms only
-  Widget _laundryTab(BuildContext context) {
+  Future<void> _markAllClean() async {
+    final box = Hive.box<ClothesItem>('clothesBox_v2');
+    for (final item in box.values) {
+      if (item.isDirty) {
+        item.isDirty = false;
+        await item.save();
+      }
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("All clothes are clean! ✨")));
+      setState(() {});
+    }
+  }
+
+  Widget _laundryTab() {
     return ValueListenableBuilder(
       valueListenable: Hive.box<ClothesItem>('clothesBox_v2').listenable(),
-      builder: (context, Box<ClothesItem> box, _) {
-        final dirtyItems = box.values
-            .where((item) =>
-                item.isDirty == true &&
-                item.category != 'Footwear')
-            .toList();
-
-
-        if (dirtyItems.isEmpty) {
-          return _emptyState(
-            icon: Icons.local_laundry_service_outlined,
-            message: "Laundry bag is empty! 🎉",
-            subtitle: "Your clothes are clean and ready to wear.",
-          );
-        }
-
-        return _itemGrid(dirtyItems, box, isShoeRack: false);
-
+      builder: (_, Box<ClothesItem> box, __) {
+        final dirty = box.values.where((i) => i.isDirty && i.category != 'Footwear').toList();
+        if (dirty.isEmpty) return _empty(Icons.local_laundry_service_outlined, "Laundry bag is empty! 🎉", "All your clothes are fresh.");
+        return _grid(dirty, isShoes: false);
       },
     );
   }
 
-  // 👟 SHOE RACK TAB — Footwear only
-  Widget _shoeRackTab(BuildContext context) {
+  Widget _shoeRackTab() {
     return ValueListenableBuilder(
       valueListenable: Hive.box<ClothesItem>('clothesBox_v2').listenable(),
-      builder: (context, Box<ClothesItem> box, _) {
-        final usedShoes = box.values
-            .where((item) =>
-                item.category == 'Footwear' &&
-                item.wearCount > 0) // Heuristic for "used" shoes since we removed isUsed
-            .toList();
-
-
-        if (usedShoes.isEmpty) {
-          return _emptyState(
-            icon: Icons.cleaning_services_outlined,
-            message: "Shoe rack is tidy!",
-            subtitle: "All shoes are polished and ready.",
-          );
-        }
-
-        return _itemGrid(usedShoes, box, isShoeRack: true);
-
+      builder: (_, Box<ClothesItem> box, __) {
+        final shoes = box.values.where((i) => i.category == 'Footwear' && i.wearCount > 0).toList();
+        if (shoes.isEmpty) return _empty(Icons.cleaning_services_outlined, "Shoe rack is tidy!", "All shoes are polished.");
+        return _grid(shoes, isShoes: true);
       },
     );
   }
 
-  Widget _itemGrid(
-      List<ClothesItem> items, Box<ClothesItem> box,
-      {required bool isShoeRack}) {
-
+  Widget _grid(List<ClothesItem> items, {required bool isShoes}) {
     return GridView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: items.length,
+      padding: const EdgeInsets.all(20),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        crossAxisSpacing: 15,
-        mainAxisSpacing: 15,
-        childAspectRatio: 0.8,
-      ),
-      itemBuilder: (context, index) {
-        final item = items[index];
-
-
+        crossAxisCount: 2, crossAxisSpacing: 14, mainAxisSpacing: 14, childAspectRatio: 0.78),
+      itemCount: items.length,
+      itemBuilder: (_, i) {
+        final item = items[i];
         return Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(20),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.05),
-                blurRadius: 10,
-                offset: const Offset(0, 5),
-              )
-            ],
-          ),
+          decoration: BoxDecoration(color: kCard, borderRadius: BorderRadius.circular(22), border: Border.all(color: kBorder)),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Expanded(
                 child: ClipRRect(
-                  borderRadius:
-                      const BorderRadius.vertical(top: Radius.circular(20)),
-                  child: Image.file(
-                    File(item.path),
-                    fit: BoxFit.cover,
-                  ),
-
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+                  child: Image.file(File(item.path), width: double.infinity, fit: BoxFit.cover),
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(item.category,
-                        style: const TextStyle(fontWeight: FontWeight.bold)),
-
-                    const SizedBox(height: 4),
+                    Text(item.color.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w800, color: kTextPrimary, fontSize: 11)),
+                    const SizedBox(height: 8),
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: isShoeRack
-                              ? const Color(0xFF5C4033)
-                              : const Color(0xFFB08968),
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
-                          ),
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                         ),
                         onPressed: () async {
                           item.isDirty = false;
-                          // For shoes, we just reset the wear count tracking for "used" status if we want
-                          // but simpler is to just mark as "cleaned"
                           await item.save();
                         },
-
-                        child: Text(
-                          isShoeRack ? "Polish ✨" : "Wash 🫧",
-                          style: const TextStyle(
-                              fontSize: 12, color: Colors.white),
-                        ),
+                        child: Text(isShoes ? "Polish ✨" : "Washed 🫧", style: const TextStyle(fontSize: 11)),
                       ),
-                    )
+                    ),
                   ],
                 ),
-              )
+              ),
             ],
           ),
         );
@@ -223,19 +137,16 @@ class _LaundryScreenState extends State<LaundryScreen>
     );
   }
 
-  Widget _emptyState(
-      {required IconData icon,
-      required String message,
-      required String subtitle}) {
+  Widget _empty(IconData icon, String title, String sub) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(icon, size: 80, color: Colors.brown.withOpacity(0.3)),
-          const SizedBox(height: 20),
-          Text(message,
-              style: const TextStyle(fontSize: 18, color: Colors.grey)),
-          Text(subtitle, style: const TextStyle(color: Colors.grey)),
+          Icon(icon, size: 72, color: kBorder),
+          const SizedBox(height: 16),
+          Text(title, style: const TextStyle(color: kTextPrimary, fontWeight: FontWeight.w700, fontSize: 16)),
+          const SizedBox(height: 6),
+          Text(sub, style: const TextStyle(color: kTextSecondary, fontSize: 13)),
         ],
       ),
     );

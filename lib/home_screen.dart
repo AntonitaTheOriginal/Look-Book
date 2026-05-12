@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:hive_flutter/hive_flutter.dart';
+import 'dart:io';
 import 'screens/closet_screen.dart';
 import 'screens/laundry_screen.dart';
 import 'screens/calendar_screen.dart';
@@ -6,10 +8,8 @@ import 'screens/analytics_screen.dart';
 import 'utils/outfit_generator.dart';
 import 'utils/weather_service.dart';
 import 'utils/claude_service.dart';
-import 'package:hive_flutter/hive_flutter.dart';
-import 'dart:io';
 import 'models/clothes_item.dart';
-import 'models/outfit.dart';
+import 'main.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -18,79 +18,121 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  final TextEditingController controller = TextEditingController();
-  String selectedCategory = "Work";
-  Map<String, dynamic>? outfit;
-  WeatherData? currentWeather;
-  String? stylistAdvice;
-  bool boldMode = true;
-  bool isAiThinking = false;
-  String userName = "Fashionista";
+class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
+  final TextEditingController _controller = TextEditingController();
+  String _selectedCategory = "Casual";
+  Map<String, dynamic>? _outfit;
+  WeatherData? _weather;
+  String? _advice;
+  bool _isAiThinking = false;
+  String _userName = "Fashionista";
+  late AnimationController _shimmer;
 
   @override
   void initState() {
     super.initState();
+    _shimmer = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500))..repeat();
     _loadUserSettings();
     _fetchWeather();
   }
 
-  void _loadUserSettings() {
-    final box = Hive.box('settingsBox');
-    setState(() {
-      userName = box.get('userName', defaultValue: 'Fashionista');
-    });
-  }
-
-  Future<void> _fetchWeather() async {
-    final weather = await WeatherService.getCurrentWeather();
-    if (mounted) {
-      setState(() {
-        currentWeather = weather;
-      });
-    }
-  }
-
   @override
   void dispose() {
-    controller.dispose();
+    _shimmer.dispose();
+    _controller.dispose();
     super.dispose();
   }
 
-  void _generate(bool isHurry) async {
+  void _loadUserSettings() {
+    final box = Hive.box('settingsBox');
+    setState(() => _userName = box.get('userName', defaultValue: 'Fashionista'));
+  }
+
+  Future<void> _fetchWeather() async {
+    setState(() => _weather = null);
+    final weather = await WeatherService.getCurrentWeather();
+    if (mounted) setState(() => _weather = weather);
+  }
+
+  Future<void> _generate({required bool hurry}) async {
     setState(() {
-      outfit = generateOutfit(
-        weather: currentWeather,
-        targetOccasion: selectedCategory,
-        targetPlace: controller.text,
-        hurryMode: isHurry,
-        boldMode: boldMode,
+      _outfit = generateOutfit(
+        weather: _weather,
+        targetOccasion: _selectedCategory,
+        targetPlace: _controller.text,
+        hurryMode: hurry,
+        boldMode: true,
       );
-      stylistAdvice = null;
-      isAiThinking = true;
+      _advice = null;
+      _isAiThinking = true;
     });
-    
-    if (outfit?['top'] == null && outfit?['isDressOutfit'] != true) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Not enough clean clothes! 🧺")),
-      );
-      setState(() => isAiThinking = false);
+
+    if (_outfit?['top'] == null && _outfit?['isDressOutfit'] != true) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Not enough clean clothes! Check your laundry 🧺")),
+        );
+      }
+      setState(() => _isAiThinking = false);
       return;
     }
 
     final advice = await ClaudeService.getStylistAdvice(
-      top: outfit!['top'] as ClothesItem?,
-      bottom: outfit!['bottom'] as ClothesItem?,
-      shoes: outfit!['shoes'] as ClothesItem?,
-      weather: currentWeather,
-      occasion: selectedCategory,
+      top: _outfit!['top'] as ClothesItem?,
+      bottom: _outfit!['bottom'] as ClothesItem?,
+      shoes: _outfit!['shoes'] as ClothesItem?,
+      weather: _weather,
+      occasion: _selectedCategory,
     );
 
+    if (mounted) setState(() { _advice = advice; _isAiThinking = false; });
+  }
+
+  Future<void> _wearToday() async {
+    if (_outfit == null) return;
+    final box = Hive.box<ClothesItem>('clothesBox_v2');
+    final now = DateTime.now();
+    for (final k in ['topKey', 'bottomKey', 'shoesKey']) {
+      if (_outfit![k] != null) {
+        final item = box.get(_outfit![k]);
+        if (item != null) {
+          if (k != 'shoesKey') item.isDirty = true;
+          item.wearCount += 1;
+          item.lastWornDate = now;
+          await item.save();
+        }
+      }
+    }
     if (mounted) {
-      setState(() {
-        stylistAdvice = advice;
-        isAiThinking = false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Outfit logged! Clothes sent to laundry 🧺")),
+      );
+      setState(() => _outfit = null);
+    }
+  }
+
+  Future<void> _scheduleOutfit() async {
+    final date = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now(),
+      firstDate: DateTime.now(),
+      lastDate: DateTime.now().add(const Duration(days: 60)),
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(colorScheme: const ColorScheme.dark(primary: kGold, onPrimary: Colors.black)),
+        child: child!,
+      ),
+    );
+    if (date != null && _outfit != null) {
+      final dateKey = date.toIso8601String().split('T')[0];
+      await Hive.box('calendarBox').put(dateKey, {
+        'top': _outfit!['top'] != null ? {'path': (_outfit!['top'] as ClothesItem).path} : null,
+        'bottom': _outfit!['bottom'] != null ? {'path': (_outfit!['bottom'] as ClothesItem).path} : null,
+        'shoes': _outfit!['shoes'] != null ? {'path': (_outfit!['shoes'] as ClothesItem).path} : null,
+        'occasion': _controller.text.isNotEmpty ? _controller.text : _selectedCategory,
       });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Scheduled to Calendar 📅")));
+      }
     }
   }
 
@@ -99,209 +141,44 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        title: const Text("LOOKBOOK AI", 
-          style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 2, fontSize: 16, color: Colors.white)),
-        centerTitle: true,
+        title: const Text("LOOKBOOK AI"),
         actions: [
           IconButton(
-            icon: const Icon(Icons.settings_outlined, color: Colors.white70),
-            onPressed: () => _showSettings(),
+            icon: const Icon(Icons.person_outline_rounded),
+            onPressed: _showSettings,
           ),
-          const SizedBox(width: 10)
         ],
       ),
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Color(0xFF0F0F10), Color(0xFF1C1C1E)],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
-        ),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.only(top: 100, left: 20, right: 20, bottom: 40),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text("Good Day,", style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 16)),
-              const SizedBox(height: 4),
-              Text(userName, style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white)),
-              
-              const SizedBox(height: 30),
-              _buildWeatherCard(),
-
-              const SizedBox(height: 25),
-              const Text("What's the occasion?", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
-              const SizedBox(height: 15),
-              
-              TextField(
-                controller: controller,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  hintText: "E.g. Summer Date, Business Lunch...",
-                  hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
-                  filled: true,
-                  fillColor: const Color(0xFF2C2C2E),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(20), borderSide: BorderSide.none),
-                  prefixIcon: const Icon(Icons.search, color: Color(0xFFD4AF37)),
-                ),
-              ),
-
-              const SizedBox(height: 20),
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: ["Work", "Casual", "Party", "Formal", "Gym"].map((cat) => _buildCategoryChip(cat)).toList(),
-                ),
-              ),
-
-              const SizedBox(height: 30),
-              Row(
+      body: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 100, 20, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(child: _buildActionButton(Icons.flash_on, "Hurry", () => _generate(true), isPrimary: false)),
-                  const SizedBox(width: 15),
-                  Expanded(child: _buildActionButton(Icons.auto_awesome, "Stylize", () => _generate(false), isPrimary: true)),
+                  _buildGreeting(),
+                  const SizedBox(height: 24),
+                  _buildWeatherCard(),
+                  const SizedBox(height: 32),
+                  _buildOccasionSection(),
+                  const SizedBox(height: 24),
+                  _buildCategoryRow(),
+                  const SizedBox(height: 28),
+                  _buildActionButtons(),
+                  const SizedBox(height: 40),
+                  if (_outfit != null) ...[
+                    _buildAiPanel(),
+                    const SizedBox(height: 28),
+                    _buildOutfitResult(),
+                    const SizedBox(height: 20),
+                    _buildOutfitActions(),
+                    const SizedBox(height: 40),
+                  ],
+                  _buildQuickNav(),
+                  const SizedBox(height: 50),
                 ],
               ),
-
-              if (outfit != null) ...[
-                const SizedBox(height: 40),
-                _buildAiStylistPanel(),
-                
-                const Row(
-                  children: [
-                    Text("THE CURATED LOOK", style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1.5, fontSize: 12, color: Color(0xFFD4AF37))),
-                    Spacer(),
-                    Icon(Icons.verified, color: Color(0xFFD4AF37), size: 14),
-                  ],
-                ),
-                const SizedBox(height: 20),
-                
-                if (outfit!['isDressOutfit'] != true)
-                  _buildOutfitCard(outfit!['top'], "TOP PIECE"),
-                if (outfit!['isDressOutfit'] != true)
-                  const SizedBox(height: 15),
-                _buildOutfitCard(outfit!['bottom'], outfit!['isDressOutfit'] == true ? "DRESS 👗" : "BOTTOM PIECE"),
-                const SizedBox(height: 15),
-                _buildOutfitCard(outfit!['shoes'], "FOOTWEAR"),
-
-                const SizedBox(height: 30),
-                _buildActionButtonsRow(),
-              ],
-
-              const SizedBox(height: 40),
-              const Text("QUICK ACCESS", style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1.5, fontSize: 12, color: Colors.white30)),
-              const SizedBox(height: 15),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  _navItem(context, Icons.checkroom_outlined, "Closet", () => Navigator.pushNamed(context, '/closet')),
-                  _navItem(context, Icons.calendar_today_outlined, "Calendar", () => Navigator.pushNamed(context, '/calendar')),
-                  _navItem(context, Icons.analytics_outlined, "Analytics", () => Navigator.pushNamed(context, '/analytics')),
-                  _navItem(context, Icons.wash_outlined, "Laundry", () => Navigator.push(context, MaterialPageRoute(builder: (context) => const LaundryScreen()))),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _showSettings() {
-    final TextEditingController nameEditController = TextEditingController(text: userName);
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF1C1C1E),
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(30))),
-      builder: (context) => Padding(
-        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-        child: Container(
-          padding: const EdgeInsets.all(30),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text("Profile Settings", style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white)),
-              const SizedBox(height: 20),
-              TextField(
-                controller: nameEditController,
-                decoration: const InputDecoration(
-                  labelText: "Your Name",
-                  labelStyle: TextStyle(color: Color(0xFFD4AF37)),
-                  border: OutlineInputBorder(),
-                  enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                ),
-                style: const TextStyle(color: Colors.white),
-              ),
-              const SizedBox(height: 30),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: () {
-                    Hive.box('settingsBox').put('userName', nameEditController.text);
-                    setState(() => userName = nameEditController.text);
-                    Navigator.pop(context);
-                  }, 
-                  child: const Text("SAVE CHANGES")
-                ),
-              ),
-              const SizedBox(height: 20),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildWeatherCard() {
-    if (currentWeather == null) {
-      return Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(24)),
-        child: const Row(children: [SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFD4AF37))), SizedBox(width: 15), Text("Loading weather...", style: TextStyle(color: Colors.white54))]),
-      );
-    }
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Colors.white.withOpacity(0.1), Colors.white.withOpacity(0.05)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: Colors.white.withOpacity(0.1)),
-      ),
-      child: Row(
-        children: [
-          Text(currentWeather!.icon, style: const TextStyle(fontSize: 40)),
-          const SizedBox(width: 20),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Text("${currentWeather!.temperature.toStringAsFixed(1)}°C  |  ${currentWeather!.condition.toUpperCase()}", 
-                      style: const TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1, fontSize: 14, color: Colors.white)),
-                    const Spacer(),
-                    GestureDetector(
-                      onTap: () {
-                        setState(() => currentWeather = null);
-                        _fetchWeather();
-                      },
-                      child: const Icon(Icons.refresh, size: 14, color: Color(0xFFD4AF37)),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text(WeatherService.getSuggestion(currentWeather!), 
-                  style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12)),
-              ],
             ),
           ),
         ],
@@ -309,144 +186,430 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildCategoryChip(String cat) {
-    final isSel = selectedCategory == cat;
-    return GestureDetector(
-      onTap: () => setState(() => selectedCategory = cat),
-      child: Container(
-        margin: const EdgeInsets.only(right: 10),
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-        decoration: BoxDecoration(
-          color: isSel ? const Color(0xFFD4AF37) : Colors.white.withOpacity(0.05),
-          borderRadius: BorderRadius.circular(15),
-          border: Border.all(color: isSel ? Colors.transparent : Colors.white.withOpacity(0.1)),
+  // ─── Greeting ────────────────────────────────────────────────────────────────
+  Widget _buildGreeting() {
+    final hour = DateTime.now().hour;
+    final greeting = hour < 12 ? "Good Morning" : hour < 17 ? "Good Afternoon" : "Good Evening";
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(greeting, style: const TextStyle(color: kTextSecondary, fontSize: 15)),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            Expanded(
+              child: Text(_userName,
+                  style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w900, color: kTextPrimary, letterSpacing: -0.5)),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(color: kGold.withOpacity(0.15), borderRadius: BorderRadius.circular(20)),
+              child: const Row(
+                children: [
+                  Icon(Icons.auto_awesome, size: 12, color: kGold),
+                  SizedBox(width: 5),
+                  Text("AI Stylist", style: TextStyle(color: kGold, fontSize: 11, fontWeight: FontWeight.w700)),
+                ],
+              ),
+            ),
+          ],
         ),
-        child: Text(cat, style: TextStyle(color: isSel ? Colors.black : Colors.white70, fontWeight: FontWeight.bold)),
+      ],
+    );
+  }
+
+  // ─── Weather Card ─────────────────────────────────────────────────────────────
+  Widget _buildWeatherCard() {
+    return GestureDetector(
+      onTap: _fetchWeather,
+      child: Container(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: kCard,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: kBorder),
+        ),
+        child: _weather == null
+          ? const Row(children: [
+              SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: kGold)),
+              SizedBox(width: 14),
+              Text("Fetching live weather...", style: TextStyle(color: kTextSecondary)),
+              Spacer(),
+              Icon(Icons.refresh, color: kTextSecondary, size: 18),
+            ])
+          : Row(
+              children: [
+                Text(_weather!.icon, style: const TextStyle(fontSize: 36)),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text("${_weather!.temperature.toStringAsFixed(1)}°C · ${_weather!.condition}",
+                          style: const TextStyle(fontWeight: FontWeight.w800, color: kTextPrimary, fontSize: 15)),
+                      const SizedBox(height: 3),
+                      Text(WeatherService.getSuggestion(_weather!),
+                          style: const TextStyle(color: kTextSecondary, fontSize: 12)),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.refresh_rounded, color: kGold, size: 18),
+              ],
+            ),
       ),
     );
   }
 
-  Widget _buildActionButton(IconData icon, String label, VoidCallback onTap, {required bool isPrimary}) {
-    return ElevatedButton(
-      onPressed: onTap,
-      style: ElevatedButton.styleFrom(
-        backgroundColor: isPrimary ? const Color(0xFFD4AF37) : const Color(0xFF1C1C1E),
-        foregroundColor: isPrimary ? Colors.black : Colors.white,
-        side: isPrimary ? BorderSide.none : BorderSide(color: Colors.white.withOpacity(0.1)),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, size: 18),
-          const SizedBox(width: 8),
-          Text(label),
-        ],
+  // ─── Occasion Input ──────────────────────────────────────────────────────────
+  Widget _buildOccasionSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text("Where are you headed?", style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18, color: kTextPrimary)),
+        const SizedBox(height: 12),
+        Container(
+          decoration: BoxDecoration(color: kCard, borderRadius: BorderRadius.circular(18), border: Border.all(color: kBorder)),
+          child: TextField(
+            controller: _controller,
+            style: const TextStyle(color: kTextPrimary, fontSize: 15),
+            decoration: InputDecoration(
+              hintText: "Office meeting, dinner date, gym...",
+              hintStyle: const TextStyle(color: kTextSecondary, fontSize: 14),
+              filled: false,
+              border: InputBorder.none,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+              prefixIcon: const Padding(
+                padding: EdgeInsets.only(left: 14, right: 10),
+                child: Icon(Icons.place_outlined, color: kGold, size: 20),
+              ),
+              prefixIconConstraints: const BoxConstraints(),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ─── Category Row ────────────────────────────────────────────────────────────
+  Widget _buildCategoryRow() {
+    const cats = ["Casual", "Work", "Party", "Formal", "Gym", "Date"];
+    return SizedBox(
+      height: 42,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: cats.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (_, i) {
+          final sel = _selectedCategory == cats[i];
+          return GestureDetector(
+            onTap: () => setState(() => _selectedCategory = cats[i]),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+              decoration: BoxDecoration(
+                color: sel ? kGold : kCard,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: sel ? Colors.transparent : kBorder),
+              ),
+              child: Text(cats[i],
+                  style: TextStyle(color: sel ? Colors.black : kTextSecondary, fontWeight: FontWeight.w700, fontSize: 13)),
+            ),
+          );
+        },
       ),
     );
   }
 
-  Widget _buildAiStylistPanel() {
+  // ─── Action Buttons ──────────────────────────────────────────────────────────
+  Widget _buildActionButtons() {
+    return Row(
+      children: [
+        Expanded(
+          child: GestureDetector(
+            onTap: () => _generate(hurry: true),
+            child: Container(
+              height: 56,
+              decoration: BoxDecoration(color: kCard, borderRadius: BorderRadius.circular(18), border: Border.all(color: kBorder)),
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.flash_on_rounded, color: kTextSecondary, size: 20),
+                  SizedBox(width: 8),
+                  Text("Hurry", style: TextStyle(color: kTextPrimary, fontWeight: FontWeight.w700, fontSize: 14)),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          flex: 2,
+          child: ElevatedButton.icon(
+            onPressed: () => _generate(hurry: false),
+            icon: const Icon(Icons.auto_awesome_rounded, size: 18),
+            label: const Text("Generate Outfit"),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ─── AI Panel ────────────────────────────────────────────────────────────────
+  Widget _buildAiPanel() {
     return Container(
-      margin: const EdgeInsets.only(bottom: 30),
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: const Color(0xFF1C1C1E),
-        borderRadius: BorderRadius.circular(30),
-        border: Border.all(color: const Color(0xFFD4AF37).withOpacity(0.3)),
-        boxShadow: [BoxShadow(color: const Color(0xFFD4AF37).withOpacity(0.05), blurRadius: 30)],
+        color: kCard,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: kGold.withOpacity(0.25)),
+        boxShadow: [BoxShadow(color: kGold.withOpacity(0.06), blurRadius: 30, offset: const Offset(0, 10))],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.auto_awesome, color: Color(0xFFD4AF37), size: 20),
-              const SizedBox(width: 10),
-              const Text("AI STYLIST VERDICT", style: TextStyle(fontWeight: FontWeight.w900, color: Color(0xFFD4AF37), letterSpacing: 1, fontSize: 12)),
+              const Icon(Icons.auto_awesome_rounded, color: kGold, size: 16),
+              const SizedBox(width: 8),
+              const Text("CLAUDE'S VERDICT", style: TextStyle(fontWeight: FontWeight.w900, color: kGold, letterSpacing: 1.5, fontSize: 10)),
               const Spacer(),
-              if (isAiThinking) const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFD4AF37))),
+              if (_isAiThinking)
+                const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: kGold)),
             ],
           ),
-          const SizedBox(height: 15),
-          if (stylistAdvice != null)
-            Text(stylistAdvice!, style: const TextStyle(fontSize: 14, height: 1.6, color: Colors.white70))
+          const SizedBox(height: 14),
+          if (_isAiThinking)
+            _buildShimmer()
+          else if (_advice != null)
+            Text(_advice!, style: const TextStyle(fontSize: 14, height: 1.65, color: kTextSecondary))
           else
-            Text("Waiting for Claude's expert opinion...", style: TextStyle(fontStyle: FontStyle.italic, color: Colors.white.withOpacity(0.3))),
+            const Text("Styling your look...", style: TextStyle(color: kTextSecondary, fontStyle: FontStyle.italic)),
         ],
       ),
     );
   }
 
-  Widget _buildOutfitCard(dynamic item, String label) {
-    if (item == null) return const SizedBox();
-    final String path = item is ClothesItem ? item.path : item['path'];
-    final String color = item is ClothesItem ? item.color : item['color'];
-
-    return Container(
-      height: 120,
-      decoration: BoxDecoration(color: const Color(0xFF1C1C1E), borderRadius: BorderRadius.circular(24)),
-      child: Row(
+  Widget _buildShimmer() {
+    return AnimatedBuilder(
+      animation: _shimmer,
+      builder: (_, __) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          ClipRRect(
-            borderRadius: const BorderRadius.horizontal(left: Radius.circular(24)),
-            child: Image.file(File(path), width: 100, height: 120, fit: BoxFit.cover),
-          ),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(label, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 10, color: Color(0xFFD4AF37), letterSpacing: 1)),
-                  const SizedBox(height: 4),
-                  Text(color.toUpperCase(), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
-                  const SizedBox(height: 4),
-                  if (item is ClothesItem) Wrap(
-                    spacing: 4,
-                    children: item.tags.take(2).map((t) => Text("#$t", style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.4)))).toList(),
-                  ),
-                ],
-              ),
-            ),
-          ),
+          _shimmerLine(1.0),
+          const SizedBox(height: 8),
+          _shimmerLine(0.85),
+          const SizedBox(height: 8),
+          _shimmerLine(0.6),
         ],
       ),
     );
   }
 
-  Widget _buildActionButtonsRow() {
-    return Row(
+  Widget _shimmerLine(double widthFactor) {
+    return FractionallySizedBox(
+      widthFactor: widthFactor,
+      child: Container(height: 12, decoration: BoxDecoration(color: kBorder, borderRadius: BorderRadius.circular(6))),
+    );
+  }
+
+  // ─── Outfit Result ───────────────────────────────────────────────────────────
+  Widget _buildOutfitResult() {
+    final isDress = _outfit!['isDressOutfit'] == true;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(child: OutlinedButton(
-          onPressed: () {}, 
-          style: OutlinedButton.styleFrom(
-            foregroundColor: Colors.white,
-            side: const BorderSide(color: Colors.white24),
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))
-          ),
-          child: const Text("SCHEDULE")
-        )),
-        const SizedBox(width: 15),
-        Expanded(child: ElevatedButton(onPressed: () {}, child: const Text("WEAR TODAY"))),
+        const Row(
+          children: [
+            Text("THE CURATED LOOK", style: TextStyle(fontWeight: FontWeight.w900, color: kGold, letterSpacing: 1.5, fontSize: 10)),
+            Spacer(),
+            Icon(Icons.verified_rounded, color: kGold, size: 14),
+          ],
+        ),
+        const SizedBox(height: 16),
+        if (!isDress && _outfit!['top'] != null)
+          _buildItemCard(_outfit!['top'] as ClothesItem, "TOP"),
+        if (!isDress) const SizedBox(height: 12),
+        if (_outfit!['bottom'] != null)
+          _buildItemCard(_outfit!['bottom'] as ClothesItem, isDress ? "DRESS" : "BOTTOM"),
+        const SizedBox(height: 12),
+        if (_outfit!['shoes'] != null)
+          _buildItemCard(_outfit!['shoes'] as ClothesItem, "FOOTWEAR"),
       ],
     );
   }
 
-  Widget _navItem(BuildContext context, IconData icon, String label, VoidCallback onTap) {
+  Widget _buildItemCard(ClothesItem item, String label) {
+    return Container(
+      height: 112,
+      decoration: BoxDecoration(color: kCard, borderRadius: BorderRadius.circular(22), border: Border.all(color: kBorder)),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(22),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 112,
+              child: Image.file(File(item.path), fit: BoxFit.cover),
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(label, style: Theme.of(context).textTheme.labelSmall),
+                    const SizedBox(height: 5),
+                    Text(item.color.toUpperCase(),
+                        style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: kTextPrimary)),
+                    if (item.occasion != null)
+                      Text(item.occasion!, style: const TextStyle(fontSize: 11, color: kTextSecondary)),
+                    if (item.tags.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Wrap(spacing: 4, children: item.tags.take(3).map((t) =>
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(color: kBorder, borderRadius: BorderRadius.circular(6)),
+                          child: Text(t, style: const TextStyle(fontSize: 9, color: kTextSecondary)),
+                        )).toList()),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ─── Outfit Actions ──────────────────────────────────────────────────────────
+  Widget _buildOutfitActions() {
+    return Column(
+      children: [
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: _wearToday,
+            icon: const Icon(Icons.check_circle_rounded, size: 18),
+            label: const Text("WEAR THIS TODAY"),
+          ),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: _scheduleOutfit,
+                icon: const Icon(Icons.calendar_today_rounded, size: 16),
+                label: const Text("Schedule"),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: () => _generate(hurry: false),
+                icon: const Icon(Icons.refresh_rounded, size: 16),
+                label: const Text("Reshuffle"),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  // ─── Quick Nav ───────────────────────────────────────────────────────────────
+  Widget _buildQuickNav() {
+    final items = [
+      (Icons.checkroom_outlined, "Closet", () => Navigator.pushNamed(context, '/closet')),
+      (Icons.calendar_today_outlined, "Calendar", () => Navigator.pushNamed(context, '/calendar')),
+      (Icons.analytics_outlined, "Insights", () => Navigator.pushNamed(context, '/analytics')),
+      (Icons.local_laundry_service_outlined, "Laundry", () => Navigator.push(context, MaterialPageRoute(builder: (_) => const LaundryScreen()))),
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text("QUICK ACCESS", style: TextStyle(fontWeight: FontWeight.w900, color: kTextSecondary, letterSpacing: 1.5, fontSize: 10)),
+        const SizedBox(height: 16),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: items.map((e) => _navPill(e.$1, e.$2, e.$3)).toList(),
+        ),
+      ],
+    );
+  }
+
+  Widget _navPill(IconData icon, String label, VoidCallback onTap) {
     return GestureDetector(
       onTap: onTap,
       child: Column(
         children: [
           Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), shape: BoxShape.circle),
-            child: Icon(icon, color: const Color(0xFFD4AF37), size: 22),
+            width: 60,
+            height: 60,
+            decoration: BoxDecoration(color: kCard, borderRadius: BorderRadius.circular(20), border: Border.all(color: kBorder)),
+            child: Icon(icon, color: kGold, size: 24),
           ),
           const SizedBox(height: 8),
-          Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white38)),
+          Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: kTextSecondary)),
         ],
+      ),
+    );
+  }
+
+  // ─── Settings ────────────────────────────────────────────────────────────────
+  void _showSettings() {
+    final ctrl = TextEditingController(text: _userName);
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: kSurface,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+      isScrollControlled: true,
+      builder: (context) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+        child: Container(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(child: Container(width: 36, height: 4, decoration: BoxDecoration(color: kBorder, borderRadius: BorderRadius.circular(2)))),
+              const SizedBox(height: 20),
+              const Text("Your Profile", style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: kTextPrimary)),
+              const SizedBox(height: 6),
+              const Text("This name is used by the AI Stylist when personalizing advice.", style: TextStyle(color: kTextSecondary, fontSize: 13)),
+              const SizedBox(height: 22),
+              Container(
+                decoration: BoxDecoration(color: kCard, borderRadius: BorderRadius.circular(16), border: Border.all(color: kBorder)),
+                child: TextField(
+                  controller: ctrl,
+                  style: const TextStyle(color: kTextPrimary),
+                  decoration: const InputDecoration(
+                    labelText: "Your Name",
+                    labelStyle: TextStyle(color: kGold),
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () {
+                    if (ctrl.text.trim().isNotEmpty) {
+                      Hive.box('settingsBox').put('userName', ctrl.text.trim());
+                      setState(() => _userName = ctrl.text.trim());
+                    }
+                    Navigator.pop(context);
+                  },
+                  child: const Text("SAVE"),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        ),
       ),
     );
   }
