@@ -6,7 +6,6 @@ import 'package:hive/hive.dart';
 import '../utils/ai_analyzer.dart';
 import '../models/clothes_item.dart';
 
-
 class ClosetScreen extends StatefulWidget {
   const ClosetScreen({super.key});
 
@@ -26,22 +25,26 @@ class _ClosetScreenState extends State<ClosetScreen> {
   List<String> suggestedTags = [];
   final ImagePicker picker = ImagePicker();
 
-
-  // Progress calculation
-  double _calculateProgress(Box box) {
-    final tops = box.values.where((i) => i['category'] == 'Tops').length;
-    final bottoms = box.values.where((i) => i['category'] == 'Bottoms').length;
-    final footwear = box.values.where((i) => i['category'] == 'Footwear').length;
-    final dresses = box.values.where((i) => i['category'] == 'Dresses').length;
-    // Target: 5 tops, 5 bottoms, 3 footwear, 2 dresses = 15 items total
-    final score = (tops / 5 + bottoms / 5 + footwear / 3 + dresses / 2) / 4;
-    return score.clamp(0.0, 1.0);
-  }
-
   @override
   void initState() {
     super.initState();
     loadImages();
+  }
+
+  void loadImages() {
+    final box = Hive.box<ClothesItem>('clothesBox_v2');
+    setState(() {
+      images = box.values.map((item) => File(item.path)).toList();
+    });
+  }
+
+  double _calculateProgress(Box box) {
+    final tops = box.values.where((i) => i.category == 'Tops').length;
+    final bottoms = box.values.where((i) => i.category == 'Bottoms').length;
+    final footwear = box.values.where((i) => i.category == 'Footwear').length;
+    final dresses = box.values.where((i) => i.category == 'Dresses').length;
+    final score = (tops / 5 + bottoms / 5 + footwear / 3 + dresses / 2) / 4;
+    return score.clamp(0.0, 1.0);
   }
 
   Future<void> pickImage({ImageSource source = ImageSource.gallery}) async {
@@ -49,19 +52,13 @@ class _ClosetScreenState extends State<ClosetScreen> {
     if (pickedFile == null) return;
 
     setState(() => isScanning = true);
-    
-    // 1. Local Background Removal (Offline)
     final removedBgPath = await AiAnalyzer.removeBackground(pickedFile.path);
-    
-    // 2. AI Analysis (Tags, Colors)
     final aiResults = await AiAnalyzer.analyzeImage(removedBgPath ?? pickedFile.path);
     
     setState(() {
       processedPath = removedBgPath ?? pickedFile.path;
       selectedColor = aiResults['color']!;
       suggestedTags = List<String>.from(aiResults['tags'] ?? []);
-      
-      // Determine category heuristic
       final aiCat = aiResults['category']!;
       if (['Tops', 'Bottoms', 'Footwear', 'Dresses'].contains(aiCat)) {
         selectedCategory = aiCat;
@@ -75,8 +72,6 @@ class _ClosetScreenState extends State<ClosetScreen> {
   void _saveItem(String path) {
     final box = Hive.box<ClothesItem>('clothesBox_v2');
     final isFootwear = selectedCategory == 'Footwear';
-    
-    // Calculate derived fields (Heuristic for now)
     double formality = 0.5;
     if (selectedOccasion == 'Formal') formality = 0.9;
     if (selectedOccasion == 'Work') formality = 0.7;
@@ -95,15 +90,12 @@ class _ClosetScreenState extends State<ClosetScreen> {
       formalityScore: formality,
       weatherSuitability: ['All'],
       colorHue: 0.0,
-      tags: suggestedTags, // Save the tags
+      tags: List.from(suggestedTags),
     );
     
     box.add(item);
-    setState(() => images.add(File(path)));
+    loadImages();
   }
-
-
-
 
   void _showSaveSheet(String path) {
     showModalBottomSheet(
@@ -112,185 +104,98 @@ class _ClosetScreenState extends State<ClosetScreen> {
       backgroundColor: Colors.transparent,
       builder: (context) => StatefulBuilder(
         builder: (context, setModalState) => Container(
-          height: MediaQuery.of(context).size.height * 0.88,
+          height: MediaQuery.of(context).size.height * 0.9,
           decoration: const BoxDecoration(
-            color: Color(0xFFF5F1ED),
+            color: Color(0xFF1C1C1E),
             borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
           ),
-          padding: const EdgeInsets.all(24),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text("AI Detected Details",
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: Colors.brown.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Row(
-                      children: [
-                        Icon(Icons.auto_awesome, size: 12, color: Colors.brown),
-                        SizedBox(width: 4),
-                        Text("AI Enhanced",
-                            style: TextStyle(color: Colors.brown, fontWeight: FontWeight.bold, fontSize: 11)),
-                      ],
-                    ),
-                  )
-                ],
-              ),
-              const SizedBox(height: 4),
-              const Text("Background removed & attributes tagged offline",
-                  style: TextStyle(color: Colors.grey, fontSize: 13)),
-
-              const SizedBox(height: 20),
-              Center(
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(20),
-                  child: Image.file(File(path), height: 180, width: 180, fit: BoxFit.cover),
-                ),
-              ),
-              const SizedBox(height: 20),
-              const Text("Category", style: TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: ['Tops','Bottoms','Dresses','Footwear'].map((cat) {
-                    final isSel = selectedCategory == cat;
-                    return GestureDetector(
-                      onTap: () => setModalState(() => selectedCategory = cat),
-                      child: Container(
-                        margin: const EdgeInsets.only(right: 8),
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: isSel ? Colors.brown : Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: isSel ? Colors.brown : Colors.grey.shade300),
-                        ),
-                        child: Text(cat, style: TextStyle(color: isSel ? Colors.white : Colors.black87)),
-                      ),
-                    );
-                  }).toList(),
-                ),
-              ),
-              const SizedBox(height: 16),
-              const Text("Fabric & Weather Attributes", style: TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  'Linen', 'Breathable', 'Cotton', 'Wool', 'Heavy Wool', 
-                  'Thermal', 'Waterproof', 'Windproof', 'Quick-dry', 'Thin', 'Thick'
-                ].map((tag) {
-                  final isSelected = suggestedTags.contains(tag);
-                  return GestureDetector(
-                    onTap: () => setModalState(() {
-                      if (isSelected) suggestedTags.remove(tag);
-                      else suggestedTags.add(tag);
-                    }),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: isSelected ? Colors.brown : Colors.white,
-                        borderRadius: BorderRadius.circular(15),
-                        border: Border.all(color: isSelected ? Colors.brown : Colors.grey.shade300),
-                      ),
-                      child: Text(tag, style: TextStyle(
-                        color: isSelected ? Colors.white : Colors.black87,
-                        fontSize: 11,
-                      )),
-                    ),
-                  );
-                }).toList(),
-              ),
-
-              const SizedBox(height: 16),
-              const Text("AI Suggested Tags", style: TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
-              if (suggestedTags.where((t) => !['Linen', 'Breathable', 'Cotton', 'Wool', 'Heavy Wool', 'Thermal', 'Waterproof', 'Windproof', 'Quick-dry', 'Thin', 'Thick'].contains(t)).isEmpty)
-                const Text("No AI attributes detected", style: TextStyle(fontSize: 11, color: Colors.grey))
-              else
-                Wrap(
-                  spacing: 8,
-                  children: suggestedTags.where((t) => !['Linen', 'Breathable', 'Cotton', 'Wool', 'Heavy Wool', 'Thermal', 'Waterproof', 'Windproof', 'Quick-dry', 'Thin', 'Thick'].contains(t)).map((tag) => Chip(
-                    label: Text(tag, style: const TextStyle(fontSize: 11)),
-                    backgroundColor: Colors.white,
-                    side: const BorderSide(color: Colors.brown),
-                    deleteIcon: const Icon(Icons.close, size: 12),
-                    onDeleted: () => setModalState(() => suggestedTags.remove(tag)),
-                  )).toList(),
-                ),
-
-              // Only show Occasion/Place/Ironing for non-Footwear
-              if (selectedCategory != 'Footwear') ...[
-                const SizedBox(height: 16),
-                const Text("Occasion", style: TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 8),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: ['Work','Party','Casual','Formal'].map((occ) {
-                      final isSel = selectedOccasion == occ;
-                      return GestureDetector(
-                        onTap: () => setModalState(() => selectedOccasion = occ),
-                        child: Container(
-                          margin: const EdgeInsets.only(right: 8),
-                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: isSel ? Colors.brown : Colors.white,
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: isSel ? Colors.brown : Colors.grey.shade300),
-                          ),
-                          child: Text(occ, style: TextStyle(color: isSel ? Colors.white : Colors.black87, fontSize: 12)),
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.all(24),
                   children: [
-                    const Row(
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Icon(Icons.iron, color: Colors.brown),
-                        SizedBox(width: 8),
-                        Text("Needs Ironing?"),
+                        const Text("Verify Details", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white)),
+                        IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close, color: Colors.white54)),
                       ],
                     ),
-                    Switch(
-                      value: needsIroning,
-                      activeColor: Colors.brown,
-                      onChanged: (val) => setModalState(() => needsIroning = val),
+                    const SizedBox(height: 20),
+                    Center(
+                      child: Container(
+                        height: 200, width: 200,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(24),
+                          image: DecorationImage(image: FileImage(File(path)), fit: BoxFit.cover),
+                          boxShadow: [BoxShadow(color: Colors.black54, blurRadius: 20)],
+                        ),
+                      ),
                     ),
+                    const SizedBox(height: 30),
+                    _sheetSection("CATEGORY"),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 10,
+                      children: ['Tops','Bottoms','Dresses','Footwear'].map((cat) {
+                        final isSel = selectedCategory == cat;
+                        return _actionChip(cat, isSel, () => setModalState(() => selectedCategory = cat));
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 25),
+                    _sheetSection("FABRIC & WEATHER"),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 8, runSpacing: 8,
+                      children: [
+                        'Linen', 'Breathable', 'Cotton', 'Wool', 'Thermal', 'Waterproof', 'Windproof', 'Thin', 'Thick'
+                      ].map((tag) {
+                        final isSelected = suggestedTags.contains(tag);
+                        return _actionChip(tag, isSelected, () {
+                          setModalState(() {
+                            if (isSelected) suggestedTags.remove(tag);
+                            else suggestedTags.add(tag);
+                          });
+                        });
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 25),
+                    if (selectedCategory != 'Footwear') ...[
+                      _sheetSection("OCCASION"),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 10,
+                        children: ['Work','Party','Casual','Formal'].map((occ) {
+                          final isSel = selectedOccasion == occ;
+                          return _actionChip(occ, isSel, () => setModalState(() => selectedOccasion = occ));
+                        }).toList(),
+                      ),
+                      const SizedBox(height: 20),
+                      SwitchListTile(
+                        title: const Text("Needs Ironing?", style: TextStyle(color: Colors.white, fontSize: 14)),
+                        value: needsIroning,
+                        activeColor: const Color(0xFFD4AF37),
+                        onChanged: (v) => setModalState(() => needsIroning = v),
+                      ),
+                    ],
                   ],
                 ),
-              ],
-              const Spacer(),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.brown,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(24),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () {
+                      _saveItem(path);
+                      Navigator.pop(context);
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Added to Wardrobe ✨")));
+                    },
+                    child: const Text("ADD TO WARDROBE"),
                   ),
-                  onPressed: () {
-                    _saveItem(path);
-                    Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("Item added to wardrobe! 🎉")),
-                    );
-                  },
-                  child: const Text("Save to Wardrobe", style: TextStyle(color: Colors.white, fontSize: 16)),
                 ),
-              )
+              ),
             ],
           ),
         ),
@@ -298,445 +203,196 @@ class _ClosetScreenState extends State<ClosetScreen> {
     );
   }
 
-  void loadImages() {
-    try {
-      final box = Hive.box<ClothesItem>('clothesBox_v2');
-      final storedItems = box.values.toList();
-
-      setState(() {
-        images = storedItems
-            .map((item) => File(item.path))
-            .toList();
-      });
-    } catch (e) {
-      debugPrint("Error loading images: $e");
-    }
+  Widget _sheetSection(String title) {
+    return Text(title, style: const TextStyle(fontWeight: FontWeight.w900, color: Color(0xFFD4AF37), fontSize: 11, letterSpacing: 1.5));
   }
 
+  Widget _actionChip(String label, bool isSelected, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFFD4AF37) : Colors.white.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: isSelected ? Colors.transparent : Colors.white.withOpacity(0.1)),
+        ),
+        child: Text(label, style: TextStyle(color: isSelected ? Colors.black : Colors.white70, fontSize: 12, fontWeight: FontWeight.bold)),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final box = Hive.box<ClothesItem>('clothesBox_v2');
-    final filteredItems = box.values
-        .where((item) => item.category == selectedCategory)
-        .toList();
-
+    final filteredItems = box.values.where((item) => item.category == selectedCategory).toList();
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF6F2EE),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // 🔙 Header
-              Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.arrow_back),
-                    onPressed: () {
-                      Navigator.pop(context);
-                    },
-                  ),
-                  const SizedBox(width: 10),
-                  const Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text("Build Your Closet",
-                          style: TextStyle(
-                              fontSize: 18, fontWeight: FontWeight.bold)),
-                      Text("Describe your items for better matching",
-                          style: TextStyle(color: Colors.grey, fontSize: 12)),
-                    ],
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 16),
-
-              Expanded(
-                child: SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // 📊 Dynamic Progress
-                      Builder(builder: (context) {
-                        final box = Hive.box<ClothesItem>('clothesBox_v2');
-
-                        final progress = _calculateProgress(box);
-                        final pct = (progress * 100).toInt();
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text("Closet $pct% complete",
-                                style: const TextStyle(color: Colors.brown)),
-                            const SizedBox(height: 6),
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(10),
-                              child: LinearProgressIndicator(
-                                value: progress,
-                                minHeight: 6,
-                                backgroundColor: Colors.grey.shade300,
-                                valueColor: const AlwaysStoppedAnimation<Color>(Colors.brown),
-                              ),
-                            ),
-                          ],
-                        );
-                      }),
-
-                      const SizedBox(height: 20),
-
-                      // 📸 Upload Section
-                      Row(
-                        children: [
-                          Expanded(
-                            child: uploadCard(
-                              Icons.camera_alt,
-                              "Take Photo",
-                              () => pickImage(source: ImageSource.camera),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: uploadCard(
-                              Icons.photo_library,
-                              "Gallery",
-                              () => pickImage(source: ImageSource.gallery),
-                            ),
-                          ),
-                        ],
-                      ),
-                      if (isScanning)
-                        Container(
-                          margin: const EdgeInsets.only(top: 12),
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.brown.withOpacity(0.08),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Row(
-                            children: [
-                              SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.brown)),
-                              SizedBox(width: 12),
-                               Text("AI is removing background & tagging...", style: TextStyle(color: Colors.brown, fontSize: 13)),
-
-                            ],
-                          ),
-                        ),
-
-                      const SizedBox(height: 20),
-
-                      // 🧥 Selection Groups
-                      sectionTitle("1. Category"),
-                      const SizedBox(height: 8),
-                      SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: Row(
-                          children: [
-                            categorySelectChip("Tops"),
-                            categorySelectChip("Bottoms"),
-                            categorySelectChip("Dresses"),
-                            categorySelectChip("Footwear"),
-                          ],
-                        ),
-                      ),
-
-                      const SizedBox(height: 20),
-
-                      sectionTitle("2. Color Tag"),
-                      const SizedBox(height: 8),
-                      SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: Row(
-                          children: [
-                            colorChip("black"),
-                            colorChip("white"),
-                            colorChip("blue"),
-                            colorChip("brown"),
-                            colorChip("beige"),
-                            colorChip("red"),
-                            colorChip("green"),
-                            colorChip("yellow"),
-                            colorChip("pink"),
-                            colorChip("purple"),
-                            colorChip("orange"),
-                            colorChip("teal"),
-                          ],
-                        ),
-                      ),
-
-                      const SizedBox(height: 20),
-
-                      sectionTitle("3. Occasion & Place"),
-                      const SizedBox(height: 8),
-                      SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: Row(
-                          children: [
-                            parameterChip("occasion", "Work", selectedOccasion == "Work"),
-                            parameterChip("occasion", "Party", selectedOccasion == "Party"),
-                            parameterChip("occasion", "Casual", selectedOccasion == "Casual"),
-                            parameterChip("occasion", "Formal", selectedOccasion == "Formal"),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: Row(
-                          children: [
-                            parameterChip("place", "Office", selectedPlace == "Office"),
-                            parameterChip("place", "Outdoor", selectedPlace == "Outdoor"),
-                            parameterChip("place", "Home", selectedPlace == "Home"),
-                            parameterChip("place", "Gym", selectedPlace == "Gym"),
-                          ],
-                        ),
-                      ),
-
-                      const SizedBox(height: 20),
-
-                      // 👕 Ironing Switch
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(15),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Row(
-                              children: [
-                                Icon(Icons.iron, color: Colors.brown),
-                                SizedBox(width: 10),
-                                Text("Needs Ironing?",
-                                    style: TextStyle(fontWeight: FontWeight.w500)),
-                              ],
-                            ),
-                            Switch(
-                              value: needsIroning,
-                              activeColor: Colors.brown,
-                              onChanged: (val) {
-                                setState(() {
-                                  needsIroning = val;
-                                });
-                              },
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      const SizedBox(height: 25),
-
-                      sectionTitle("Your Wardrobe ($selectedCategory)"),
-                      const SizedBox(height: 10),
-
-                      // 🧺 Grid
-                      GridView.builder(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        itemCount: filteredItems.length,
-                        gridDelegate:
-                            const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 3,
-                          crossAxisSpacing: 10,
-                          mainAxisSpacing: 10,
-                        ),
-                        itemBuilder: (context, index) {
-                          final item = filteredItems[index];
-                          return Stack(
-                            children: [
-                              Container(
-                                decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: Colors.brown.withOpacity(0.1)),
-                                  image: DecorationImage(
-                                    image: FileImage(File(item.path)),
-                                    fit: BoxFit.cover,
-                                  ),
-                                ),
-                              ),
-                              Positioned(
-                                top: 5,
-                                right: 5,
-                                child: GestureDetector(
-                                  onTap: () async {
-                                    await item.delete();
-                                    setState(() {
-                                      images.removeWhere((f) => f.path == item.path);
-                                    });
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(content: Text("Item removed from closet")),
-                                    );
-                                  },
-                                  child: Container(
-                                    padding: const EdgeInsets.all(4),
-                                    decoration: const BoxDecoration(
-                                      color: Colors.white,
-                                      shape: BoxShape.circle,
-                                    ),
-                                    child: const Icon(Icons.close, size: 14, color: Colors.red),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          );
-
-                        },
-                      ),
-                      const SizedBox(height: 100),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        title: const Text("MY CLOSET", style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 2, fontSize: 14, color: Colors.white)),
+        centerTitle: true,
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: Colors.brown,
-        onPressed: () => Navigator.pop(context),
-        label: const Text("Save & Exit", style: TextStyle(color: Colors.white)),
-        icon: const Icon(Icons.check, color: Colors.white),
-      ),
-    );
-  }
-
-  Widget sectionTitle(String title) {
-    return Text(title,
-        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16));
-  }
-
-  Widget parameterChip(String type, String value, bool isSelected) {
-    return GestureDetector(
-      onTap: () {
-        setState(() {
-          if (type == "occasion") selectedOccasion = value;
-          if (type == "place") selectedPlace = value;
-        });
-      },
-      child: Container(
-        margin: const EdgeInsets.only(right: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          color: isSelected ? Colors.brown : Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: isSelected ? Colors.brown : Colors.grey.shade300),
-        ),
-        child: Text(
-          value,
-          style: TextStyle(
-            color: isSelected ? Colors.white : Colors.black87,
-            fontSize: 13,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget categorySelectChip(String category) {
-    final isSelected = selectedCategory == category;
-    final box = Hive.box<ClothesItem>('clothesBox_v2');
-    final count = box.values
-        .where((item) => item.category == category)
-        .length;
-
-
-    return GestureDetector(
-      onTap: () {
-        setState(() {
-          selectedCategory = category;
-        });
-      },
-      child: Container(
-        margin: const EdgeInsets.only(right: 10),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: BoxDecoration(
-          color: isSelected ? Colors.brown : Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: isSelected ? Colors.brown : Colors.grey.shade300),
-        ),
-        child: Row(
+      body: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              category,
-              style: TextStyle(
-                color: isSelected ? Colors.white : Colors.black,
-              ),
+            const SizedBox(height: 10),
+            _buildProgressSection(box),
+            const SizedBox(height: 30),
+            _buildUploadSection(),
+            const SizedBox(height: 30),
+            _buildCategoryFilters(),
+            const SizedBox(height: 25),
+            Expanded(
+              child: filteredItems.isEmpty 
+                ? _buildEmptyState()
+                : GridView.builder(
+                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 2, crossAxisSpacing: 15, mainAxisSpacing: 15, childAspectRatio: 0.8
+                    ),
+                    itemCount: filteredItems.length,
+                    itemBuilder: (context, index) => _buildClothesCard(filteredItems[index]),
+                  ),
             ),
-            const SizedBox(width: 6),
-            CircleAvatar(
-              radius: 10,
-              backgroundColor: isSelected ? Colors.white : Colors.grey.shade400,
-              child: Text(
-                "$count",
-                style: TextStyle(
-                  fontSize: 10,
-                  color: isSelected ? Colors.brown : Colors.white,
-                ),
-              ),
-            )
           ],
         ),
       ),
     );
   }
 
-  Widget colorChip(String color) {
-    final isSelected = selectedColor == color;
-
-    return GestureDetector(
-      onTap: () {
-        setState(() {
-          selectedColor = color;
-        });
-      },
-      child: Container(
-        margin: const EdgeInsets.only(right: 10),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: BoxDecoration(
-          color: isSelected ? Colors.brown : Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: isSelected ? Colors.brown : Colors.grey.shade300),
+  Widget _buildProgressSection(Box box) {
+    final progress = _calculateProgress(box);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text("CAPSULE GOAL", style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: Colors.white38, letterSpacing: 1)),
+            Text("${(progress * 100).toInt()}%", style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFFD4AF37))),
+          ],
         ),
-        child: Text(
-          color,
-          style: TextStyle(
-            color: isSelected ? Colors.white : Colors.black,
-          ),
+        const SizedBox(height: 8),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: LinearProgressIndicator(value: progress, minHeight: 4, backgroundColor: Colors.white10, valueColor: const AlwaysStoppedAnimation(Color(0xFFD4AF37))),
         ),
-      ),
+      ],
     );
   }
 
-  Widget uploadCard(IconData icon, String text, VoidCallback onTap) {
+  Widget _buildUploadSection() {
+    return Row(
+      children: [
+        Expanded(child: _uploadButton(Icons.camera_alt_outlined, "CAMERA", () => pickImage(source: ImageSource.camera))),
+        const SizedBox(width: 15),
+        Expanded(child: _uploadButton(Icons.photo_library_outlined, "GALLERY", () => pickImage(source: ImageSource.gallery))),
+      ],
+    );
+  }
+
+  Widget _uploadButton(IconData icon, String label, VoidCallback onTap) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        height: 80,
+        height: 100,
         decoration: BoxDecoration(
-          border: Border.all(color: Colors.brown, style: BorderStyle.solid),
-          borderRadius: BorderRadius.circular(15),
-          color: Colors.white,
+          color: const Color(0xFF1C1C1E),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Colors.white.withOpacity(0.05)),
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, color: Colors.brown, size: 28),
-            const SizedBox(height: 4),
-            Text(text, style: const TextStyle(fontSize: 12)),
+            Icon(icon, color: const Color(0xFFD4AF37), size: 30),
+            const SizedBox(height: 8),
+            Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w900, letterSpacing: 1, color: Colors.white54)),
           ],
         ),
       ),
     );
   }
 
-  Widget tagChip(String text) {
-    return Chip(
-      label: Text(text),
-      backgroundColor: Colors.white,
-      side: BorderSide(color: Colors.grey.shade300),
+  Widget _buildCategoryFilters() {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: ['Tops','Bottoms','Dresses','Footwear'].map((cat) {
+          final isSel = selectedCategory == cat;
+          return GestureDetector(
+            onTap: () => setState(() => selectedCategory = cat),
+            child: Container(
+              margin: const EdgeInsets.only(right: 15),
+              child: Column(
+                children: [
+                  Text(cat.toUpperCase(), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: isSel ? Colors.white : Colors.white24, letterSpacing: 1)),
+                  if (isSel) Container(margin: const EdgeInsets.only(top: 4), height: 2, width: 20, color: const Color(0xFFD4AF37)),
+                ],
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  Widget _buildClothesCard(ClothesItem item) {
+    return Container(
+      decoration: BoxDecoration(color: const Color(0xFF1C1C1E), borderRadius: BorderRadius.circular(24)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Stack(
+              children: [
+                ClipRRect(
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                  child: Image.file(File(item.path), width: double.infinity, fit: BoxFit.cover),
+                ),
+                Positioned(
+                  top: 10, right: 10,
+                  child: GestureDetector(
+                    onTap: () async {
+                      await item.delete();
+                      loadImages();
+                    },
+                    child: Container(padding: const EdgeInsets.all(6), decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle), child: const Icon(Icons.close, size: 14, color: Colors.white70)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(item.color.toUpperCase(), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: 0.5)),
+                const SizedBox(height: 2),
+                Text(item.occasion ?? "ANYTIME", style: const TextStyle(fontSize: 9, color: Colors.white38)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.style_outlined, color: Colors.white10, size: 80),
+          const SizedBox(height: 20),
+          Text("NO $selectedCategory FOUND", style: TextStyle(color: Colors.white24, fontWeight: FontWeight.bold, letterSpacing: 2)),
+          const SizedBox(height: 8),
+          Text("Add items to start building your capsule", style: TextStyle(color: Colors.white10, fontSize: 12)),
+        ],
+      ),
     );
   }
 }
