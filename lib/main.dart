@@ -68,7 +68,7 @@ class LookBookApp extends StatelessWidget {
           titleLarge: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white),
           bodyMedium: TextStyle(fontSize: 14, color: Colors.white70),
         ),
-        cardTheme: CardTheme(
+        cardTheme: CardThemeData(
           color: const Color(0xFF1C1C1E),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
           elevation: 0,
