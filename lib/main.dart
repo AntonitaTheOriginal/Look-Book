@@ -10,22 +10,34 @@ import 'models/clothes_item.dart';
 import 'models/outfit.dart';
 
 void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await dotenv.load(fileName: ".env");
+  try {
+    WidgetsFlutterBinding.ensureInitialized();
+    
+    // Load secrets
+    await dotenv.load(fileName: ".env");
 
-  await Hive.initFlutter();
-  
-  // Register Adapters
-  Hive.registerAdapter(ClothesItemAdapter());
-  Hive.registerAdapter(OutfitAdapter());
+    await Hive.initFlutter();
+    
+    // Register Adapters
+    if (!Hive.isAdapterRegistered(0)) { // Assuming ID 0 for ClothesItem
+      Hive.registerAdapter(ClothesItemAdapter());
+    }
+    if (!Hive.isAdapterRegistered(1)) { // Assuming ID 1 for Outfit
+      Hive.registerAdapter(OutfitAdapter());
+    }
 
-  // Clear old data for migration to new structured models as per user approval
-  // We use v2 box names to avoid conflicts and ensure a clean start
-  await Hive.openBox<ClothesItem>('clothesBox_v2');
-  await Hive.openBox<Outfit>('savedOutfits_v2');
-  await Hive.openBox('calendarBox'); 
+    // Open Boxes
+    await Hive.openBox<ClothesItem>('clothesBox_v2');
+    await Hive.openBox<Outfit>('savedOutfits_v2');
+    await Hive.openBox('calendarBox'); 
 
-  runApp(const LookBookApp());
+    runApp(const LookBookApp());
+  } catch (e) {
+    debugPrint("Initialization Error: $e");
+    // Fallback: Run app anyway but with error state if possible
+    // Or just run it and let the screens handle null services
+    runApp(const LookBookApp());
+  }
 }
 
 
