@@ -125,7 +125,7 @@ class AiAnalyzer {
   // Weighted Euclidean Distance for better color perception
   // See: https://en.wikipedia.org/wiki/Color_difference
   static double _weightedColorDistance(Color c1, Color c2) {
-    long rmean = ( (c1.red + c2.red) / 2 ).toInt();
+    int rmean = ( (c1.red + c2.red) / 2 ).toInt();
     int r = c1.red - c2.red;
     int g = c1.green - c2.green;
     int b = c1.blue - c2.blue;
